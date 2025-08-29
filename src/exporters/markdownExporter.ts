@@ -48,7 +48,9 @@ export class MarkdownExporter {
       // Process each document
       for (let i = 0; i < documents.length; i++) {
         const document = documents[i];
-        if (!document) continue;
+        if (!document) {
+          continue;
+        }
         
         // Update progress
         if (progressCallback) {
@@ -163,7 +165,9 @@ export class MarkdownExporter {
       // Process each catalog item
       for (let i = 0; i < catalogItems.length; i++) {
         const item = catalogItems[i];
-        if (!item) continue;
+        if (!item) {
+          continue;
+        }
         
         // Update progress
         if (progressCallback) {
