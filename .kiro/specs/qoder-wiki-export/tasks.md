@@ -2,17 +2,12 @@
 
 - [x] 1. Set up VSCode extension project structure and configuration
 
-
-
-
-
-
   - Create package.json with extension metadata, dependencies, and command definitions
   - Set up TypeScript configuration with appropriate compiler options
   - Create basic directory structure for src/, types/
   - _Requirements: 1.3_
 
-- [ ] 2. Implement core type definitions and interfaces
+- [x] 2. Implement core type definitions and interfaces
 
   - Create types/qoder.ts with WikiCatalog, WikiDocument, and API response interfaces
   - Define ExportResult, ExportError, and configuration interfaces
