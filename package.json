@@ -19,7 +19,9 @@
   ],
   "activationEvents": [
     "onCommand:qoderWikiExport.exportWiki",
-    "onCommand:qoderWikiExport.exportSelected"
+    "onCommand:qoderWikiExport.exportSelected",
+    "onCommand:qoderWikiExport.checkQoderStatus",
+    "onCommand:qoderWikiExport.showInfo"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -27,12 +29,26 @@
       {
         "command": "qoderWikiExport.exportWiki",
         "title": "Export Qoder Wiki Documentation",
-        "category": "Qoder Wiki Export"
+        "category": "Qoder Wiki Export",
+        "icon": "$(export)"
       },
       {
         "command": "qoderWikiExport.exportSelected",
         "title": "Export Selected Wiki Documents",
-        "category": "Qoder Wiki Export"
+        "category": "Qoder Wiki Export",
+        "icon": "$(export)"
+      },
+      {
+        "command": "qoderWikiExport.checkQoderStatus",
+        "title": "Check Qoder Status",
+        "category": "Qoder Wiki Export",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "qoderWikiExport.showInfo",
+        "title": "Show Extension Info",
+        "category": "Qoder Wiki Export",
+        "icon": "$(info)"
       }
     ]
   },
