@@ -40,7 +40,7 @@
   - Add index file generation with navigation links to all exported documents
   - _Requirements: 2.3, 3.1, 3.2, 3.4, 3.5, 3.6_
 
-- [ ] 6. Implement DocumentSelector UI for user interaction
+- [x] 6. Implement DocumentSelector UI for user interaction
 
   - Create showSelectionDialog() using VSCode QuickPick API for document selection
   - Implement hierarchical document tree display with checkboxes
