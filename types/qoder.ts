@@ -97,8 +97,11 @@ export interface ExportService {
   exportDocuments(
     documents: WikiCatalog[],
     destination: string,
-    progressCallback?: ProgressCallback
+    progressCallback?: ProgressCallback,
+    cancellationToken?: any // VSCode CancellationToken
   ): Promise<ExportResult>;
+  isExportInProgress(): boolean;
+  cancelExport(): void;
 }
 
 export interface MarkdownExporter {

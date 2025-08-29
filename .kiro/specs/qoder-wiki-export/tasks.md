@@ -48,7 +48,7 @@
   - Include filtering options to show only completed documents
   - _Requirements: 2.2, 2.5, 2.6, 4.1_
 
-- [ ] 7. Create ExportService to orchestrate the export process
+- [x] 7. Create ExportService to orchestrate the export process
 
   - Implement exportDocuments() method that coordinates all export steps
   - Add progress tracking and callback functionality for UI updates
