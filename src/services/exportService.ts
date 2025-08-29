@@ -13,6 +13,9 @@ import {
 import { QoderApiServiceImpl } from './qoderApiService';
 import { MarkdownExporter } from '../exporters/markdownExporter';
 import { FileService } from './fileService';
+import { ErrorHandler } from './errorHandler';
+import { NotificationService } from './notificationService';
+import { GracefulDegradation } from './gracefulDegradation';
 
 /**
  * ExportService orchestrates the complete export process.
@@ -22,17 +25,26 @@ export class ExportService implements IExportService {
   private qoderApiService: QoderApiServiceImpl;
   private markdownExporter: MarkdownExporter;
   private fileService: FileService;
+  private errorHandler: ErrorHandler;
+  private notificationService: NotificationService;
+  private gracefulDegradation: GracefulDegradation;
   private cancellationToken: vscode.CancellationToken | undefined = undefined;
   private isExporting: boolean = false;
 
   constructor(
     qoderApiService?: QoderApiServiceImpl,
     markdownExporter?: MarkdownExporter,
-    fileService?: FileService
+    fileService?: FileService,
+    errorHandler?: ErrorHandler,
+    notificationService?: NotificationService,
+    gracefulDegradation?: GracefulDegradation
   ) {
-    this.qoderApiService = qoderApiService || new QoderApiServiceImpl();
+    this.errorHandler = errorHandler || new ErrorHandler();
+    this.qoderApiService = qoderApiService || new QoderApiServiceImpl(this.errorHandler);
     this.fileService = fileService || new FileService();
     this.markdownExporter = markdownExporter || new MarkdownExporter(this.fileService);
+    this.notificationService = notificationService || new NotificationService();
+    this.gracefulDegradation = gracefulDegradation || new GracefulDegradation(this.errorHandler);
   }
 
   /**
@@ -58,19 +70,32 @@ export class ExportService implements IExportService {
     let failedCount = 0;
 
     try {
+      // Log export start and create performance timer
+      const exportTimer = this.errorHandler.createPerformanceTimer('Export Operation');
+      this.errorHandler.logInfo('Starting export operation', {
+        documentCount: documents.length,
+        destination,
+        hasProgressCallback: !!progressCallback,
+        hasCancellationToken: !!cancellationToken
+      });
+
       // Validate inputs
       if (!documents || documents.length === 0) {
-        throw new ExportError(
+        const error = new ExportError(
           ExportErrorType.API_ERROR,
           'No documents provided for export'
         );
+        this.errorHandler.handleError(error, 'Input validation');
+        throw error;
       }
 
       if (!destination || destination.trim().length === 0) {
-        throw new ExportError(
+        const error = new ExportError(
           ExportErrorType.FILE_SYSTEM_ERROR,
           'Invalid destination path provided'
         );
+        this.errorHandler.handleError(error, 'Input validation');
+        throw error;
       }
 
       // Check if Qoder is available and user is authenticated
@@ -79,7 +104,12 @@ export class ExportService implements IExportService {
       // Filter documents to only include completed ones
       const completedDocuments = this.filterCompletedDocuments(documents);
       
+      this.errorHandler.logInfo(`Filtered documents: ${completedDocuments.length} completed out of ${documents.length} total`);
+      
       if (completedDocuments.length === 0) {
+        this.errorHandler.logWarning('No completed documents found for export');
+        this.notificationService.showQuickWarning('No completed documents found to export.');
+        
         return {
           success: true,
           exportedCount: 0,
@@ -139,7 +169,28 @@ export class ExportService implements IExportService {
         percentage: 100
       });
 
-      return {
+      // Log export completion with performance metrics
+      exportTimer({
+        success: errors.length === 0,
+        exportedCount,
+        failedCount,
+        errorCount: errors.length,
+        documentsProcessed: completedDocuments.length
+      });
+      
+      this.errorHandler.logInfo('Export operation completed', {
+        success: errors.length === 0,
+        exportedCount,
+        failedCount,
+        errorCount: errors.length
+      });
+
+      // Handle errors gracefully - don't show individual errors here as they're handled elsewhere
+      if (errors.length > 0) {
+        this.errorHandler.handleMultipleErrors(errors, 'Export operation', false);
+      }
+
+      const result: ExportResult = {
         success: errors.length === 0,
         exportedCount,
         failedCount,
@@ -147,19 +198,24 @@ export class ExportService implements IExportService {
         outputPath: destination
       };
 
+      return result;
+
     } catch (error) {
       // Handle cancellation
       if (this.cancellationToken?.isCancellationRequested) {
+        this.errorHandler.logInfo('Export operation cancelled by user');
         await this.performCleanup(destination);
+        
+        const cancelError = new ExportError(
+          ExportErrorType.USER_CANCELLED,
+          'Export operation was cancelled by user'
+        );
         
         return {
           success: false,
           exportedCount,
           failedCount: documents.length - exportedCount,
-          errors: [new ExportError(
-            ExportErrorType.USER_CANCELLED,
-            'Export operation was cancelled by user'
-          )],
+          errors: [cancelError],
           outputPath: destination
         };
       }
@@ -174,11 +230,18 @@ export class ExportService implements IExportService {
             error
           );
 
+      // Log the critical error
+      this.errorHandler.handleError(exportError, 'Critical export failure', false);
+
       // Attempt cleanup on failure
       try {
         await this.performCleanup(destination);
       } catch (cleanupError) {
-        console.error('Failed to cleanup after export failure:', cleanupError);
+        this.errorHandler.handleError(
+          cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+          'Cleanup after export failure',
+          false
+        );
       }
 
       return {
@@ -276,21 +339,36 @@ export class ExportService implements IExportService {
       this.checkCancellation();
 
       try {
+        const documentTimer = this.errorHandler.createPerformanceTimer(`Document Retrieval: ${document.name}`);
         const wikiDocument = await this.retrieveDocumentWithRetry(document);
         successful.push(wikiDocument);
+        documentTimer({ documentId: document.id, status: document.status });
+        this.errorHandler.logDebug(`Successfully retrieved document: ${document.name}`, { 
+          documentId: document.id, 
+          contentLength: wikiDocument.content.length 
+        });
       } catch (error) {
         failed.push(document);
         
-        if (error instanceof ExportError) {
-          errors.push(error);
-        } else {
-          errors.push(new ExportError(
-            ExportErrorType.API_ERROR,
-            `Failed to retrieve content for document: ${document.name}`,
-            document.id,
-            error
-          ));
-        }
+        const exportError = error instanceof ExportError 
+          ? error 
+          : new ExportError(
+              ExportErrorType.API_ERROR,
+              `Failed to retrieve content for document: ${document.name}`,
+              document.id,
+              error
+            );
+        
+        errors.push(exportError);
+        
+        // Log individual document failures for debugging, but don't show to user yet
+        this.errorHandler.handleError(exportError, `Document retrieval: ${document.name}`, false);
+        this.errorHandler.logDebug(`Document retrieval failed`, {
+          documentId: document.id,
+          documentName: document.name,
+          errorType: exportError.type,
+          attempt: `${i + 1}/${documents.length}`
+        });
       }
     }
 
@@ -307,55 +385,18 @@ export class ExportService implements IExportService {
     document: WikiCatalog,
     maxRetries: number = 3
   ): Promise<WikiDocument> {
-    let lastError: Error | null = null;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
+    return this.gracefulDegradation.retryWithBackoff(
+      async () => {
         // Check for cancellation before each attempt
         this.checkCancellation();
-
-        const wikiDocument = await this.qoderApiService.getWikiContent(document.id);
-        return wikiDocument;
-
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Don't retry for certain error types
-        if (error instanceof ExportError) {
-          if (error.type === ExportErrorType.AUTHENTICATION_FAILED ||
-              error.type === ExportErrorType.QODER_NOT_AVAILABLE ||
-              error.type === ExportErrorType.USER_CANCELLED) {
-            throw error;
-          }
-        }
-
-        // If this is the last attempt, throw the error
-        if (attempt === maxRetries) {
-          throw error;
-        }
-
-        // Wait before retrying (exponential backoff)
-        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-        await this.delay(delay);
-      }
-    }
-
-    // This should never be reached, but just in case
-    throw lastError || new ExportError(
-      ExportErrorType.API_ERROR,
-      `Failed to retrieve document after ${maxRetries} attempts: ${document.name}`,
-      document.id
+        return await this.qoderApiService.getWikiContent(document.id);
+      },
+      maxRetries,
+      1000
     );
   }
 
-  /**
-   * Creates a delay for retry logic.
-   * @param ms - Milliseconds to delay
-   * @returns Promise that resolves after the delay
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
+
 
   /**
    * Updates progress callback if provided.
@@ -432,7 +473,15 @@ export class ExportService implements IExportService {
       // The cancellation token should be managed by the caller (VSCode progress API)
       // This method is here for completeness but the actual cancellation
       // is handled through the cancellation token passed to exportDocuments
-      console.log('Export cancellation requested');
+      this.errorHandler.logInfo('Export cancellation requested');
     }
+  }
+
+  /**
+   * Disposes of resources used by the export service.
+   */
+  public dispose(): void {
+    this.errorHandler.dispose();
+    this.gracefulDegradation.dispose();
   }
 }

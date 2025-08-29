@@ -546,8 +546,8 @@ export class MarkdownExporter {
    */
   private preserveCodeBlocks(content: string): string {
     // Ensure fenced code blocks have proper spacing
-    return content.replace(/(```[\s\S]*?```)/g, (match) => {
-      return `\n${match}\n`;
+    return content.replace(/(```[\s\S]*?```)/g, (codeBlock) => {
+      return `\n${codeBlock}\n`;
     });
   }
 
@@ -558,8 +558,8 @@ export class MarkdownExporter {
    */
   private preserveTables(content: string): string {
     // Ensure tables have proper spacing
-    return content.replace(/(\|.*\|.*\n)/g, (match) => {
-      return match;
+    return content.replace(/(\|.*\|.*\n)/g, (tableRow) => {
+      return tableRow;
     });
   }
 
@@ -570,8 +570,8 @@ export class MarkdownExporter {
    */
   private preserveLists(content: string): string {
     // Ensure proper spacing around lists
-    return content.replace(/^(\s*[-*+]\s+.+)$/gm, (match) => {
-      return match;
+    return content.replace(/^(\s*[-*+]\s+.+)$/gm, (listItem) => {
+      return listItem;
     });
   }
 

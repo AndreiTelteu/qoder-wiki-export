@@ -58,7 +58,14 @@ export enum ExportErrorType {
   API_ERROR = 'api_error',
   FILE_SYSTEM_ERROR = 'file_system_error',
   CONVERSION_ERROR = 'conversion_error',
-  USER_CANCELLED = 'user_cancelled'
+  USER_CANCELLED = 'user_cancelled',
+  NETWORK_ERROR = 'network_error',
+  RATE_LIMIT_ERROR = 'rate_limit_error',
+  DOCUMENT_NOT_FOUND = 'document_not_found',
+  PERMISSION_DENIED = 'permission_denied',
+  DISK_SPACE_ERROR = 'disk_space_error',
+  TIMEOUT_ERROR = 'timeout_error',
+  VALIDATION_ERROR = 'validation_error'
 }
 
 // Configuration Types
@@ -91,6 +98,7 @@ export interface QoderApiService {
   isUserLoggedIn(): Promise<boolean>;
   getWikiCatalogs(): Promise<WikiCatalog[]>;
   getWikiContent(documentId: string): Promise<WikiDocument>;
+  dispose(): void;
 }
 
 export interface ExportService {
@@ -102,6 +110,7 @@ export interface ExportService {
   ): Promise<ExportResult>;
   isExportInProgress(): boolean;
   cancelExport(): void;
+  dispose(): void;
 }
 
 export interface MarkdownExporter {

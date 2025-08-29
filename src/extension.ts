@@ -4,7 +4,12 @@
  */
 
 import * as vscode from 'vscode';
-import { executeExportCommand } from './commands/exportCommand';
+import { executeExportCommand, ExportCommand } from './commands/exportCommand';
+import { ErrorHandler } from './services/errorHandler';
+
+// Global error handler for the extension
+let globalErrorHandler: ErrorHandler | undefined;
+let exportCommandInstance: ExportCommand | undefined;
 
 /**
  * Extension activation function
@@ -12,53 +17,96 @@ import { executeExportCommand } from './commands/exportCommand';
  * @param context - VSCode extension context
  */
 export function activate(context: vscode.ExtensionContext) {
-  console.log('Qoder Wiki Export extension is now active');
+  try {
+    globalErrorHandler = new ErrorHandler();
+    globalErrorHandler.logInfo('Qoder Wiki Export extension is now active');
 
-  // Register the main export command
-  const exportCommand = vscode.commands.registerCommand(
-    'qoderWikiExport.exportWiki',
-    async () => {
-      try {
-        await executeExportCommand();
-      } catch (error) {
-        console.error('Error executing export command:', error);
-        
-        // Show generic error message if command execution fails unexpectedly
-        const message = error instanceof Error 
-          ? `Export command failed: ${error.message}`
-          : 'Export command failed with an unknown error';
-          
-        vscode.window.showErrorMessage(message);
+    // Create a single instance of the export command for resource management
+    exportCommandInstance = new ExportCommand();
+
+    // Register the main export command
+    const exportCommand = vscode.commands.registerCommand(
+      'qoderWikiExport.exportWiki',
+      async () => {
+        try {
+          if (exportCommandInstance) {
+            await exportCommandInstance.execute();
+          } else {
+            await executeExportCommand();
+          }
+        } catch (error) {
+          if (globalErrorHandler) {
+            globalErrorHandler.handleError(
+              error instanceof Error ? error : new Error(String(error)),
+              'Export command execution'
+            );
+          } else {
+            console.error('Error executing export command:', error);
+            const message = error instanceof Error 
+              ? `Export command failed: ${error.message}`
+              : 'Export command failed with an unknown error';
+            vscode.window.showErrorMessage(message);
+          }
+        }
       }
-    }
-  );
+    );
 
-  // Register the export selected documents command (alias for main command)
-  const exportSelectedCommand = vscode.commands.registerCommand(
-    'qoderWikiExport.exportSelected',
-    async () => {
-      try {
-        await executeExportCommand();
-      } catch (error) {
-        console.error('Error executing export selected command:', error);
-        
-        const message = error instanceof Error 
-          ? `Export command failed: ${error.message}`
-          : 'Export command failed with an unknown error';
-          
-        vscode.window.showErrorMessage(message);
+    // Register the export selected documents command (alias for main command)
+    const exportSelectedCommand = vscode.commands.registerCommand(
+      'qoderWikiExport.exportSelected',
+      async () => {
+        try {
+          if (exportCommandInstance) {
+            await exportCommandInstance.execute();
+          } else {
+            await executeExportCommand();
+          }
+        } catch (error) {
+          if (globalErrorHandler) {
+            globalErrorHandler.handleError(
+              error instanceof Error ? error : new Error(String(error)),
+              'Export selected command execution'
+            );
+          } else {
+            console.error('Error executing export selected command:', error);
+            const message = error instanceof Error 
+              ? `Export command failed: ${error.message}`
+              : 'Export command failed with an unknown error';
+            vscode.window.showErrorMessage(message);
+          }
+        }
       }
+    );
+
+    // Add commands to extension subscriptions for proper cleanup
+    context.subscriptions.push(exportCommand);
+    context.subscriptions.push(exportSelectedCommand);
+
+    // Register additional commands that might be useful
+    registerUtilityCommands(context);
+
+    // Add error handler to subscriptions for proper disposal
+    if (globalErrorHandler) {
+      context.subscriptions.push({
+        dispose: () => globalErrorHandler?.dispose()
+      });
     }
-  );
 
-  // Add commands to extension subscriptions for proper cleanup
-  context.subscriptions.push(exportCommand);
-  context.subscriptions.push(exportSelectedCommand);
+    // Add export command instance to subscriptions for proper disposal
+    if (exportCommandInstance) {
+      context.subscriptions.push({
+        dispose: () => exportCommandInstance?.dispose()
+      });
+    }
 
-  // Register additional commands that might be useful
-  registerUtilityCommands(context);
-
-  console.log('Qoder Wiki Export extension commands registered successfully');
+    globalErrorHandler.logInfo('Qoder Wiki Export extension commands registered successfully');
+    
+  } catch (error) {
+    console.error('Failed to activate Qoder Wiki Export extension:', error);
+    vscode.window.showErrorMessage(
+      `Failed to activate Qoder Wiki Export extension: ${error instanceof Error ? error.message : 'Unknown error'}`
+    );
+  }
 }
 
 /**
@@ -72,7 +120,7 @@ function registerUtilityCommands(context: vscode.ExtensionContext) {
     async () => {
       try {
         const { QoderApiServiceImpl } = await import('./services/qoderApiService');
-        const qoderService = new QoderApiServiceImpl();
+        const qoderService = new QoderApiServiceImpl(globalErrorHandler);
         
         const isAvailable = qoderService.isQoderAvailable();
         
@@ -85,6 +133,7 @@ function registerUtilityCommands(context: vscode.ExtensionContext) {
               vscode.commands.executeCommand('workbench.view.extensions');
             }
           });
+          qoderService.dispose();
           return;
         }
 
@@ -107,11 +156,20 @@ function registerUtilityCommands(context: vscode.ExtensionContext) {
           }
         }
         
+        qoderService.dispose();
+        
       } catch (error) {
-        console.error('Error checking Qoder status:', error);
-        vscode.window.showErrorMessage(
-          `Failed to check Qoder status: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
+        if (globalErrorHandler) {
+          globalErrorHandler.handleError(
+            error instanceof Error ? error : new Error(String(error)),
+            'Qoder status check'
+          );
+        } else {
+          console.error('Error checking Qoder status:', error);
+          vscode.window.showErrorMessage(
+            `Failed to check Qoder status: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
+        }
       }
     }
   );
@@ -155,10 +213,31 @@ Commands:
  * Called when the extension is deactivated by VSCode
  */
 export function deactivate() {
-  console.log('Qoder Wiki Export extension is being deactivated');
-  
-  // Perform any necessary cleanup here
-  // Note: VSCode automatically disposes of registered commands and subscriptions
-  
-  console.log('Qoder Wiki Export extension deactivated successfully');
+  try {
+    if (globalErrorHandler) {
+      globalErrorHandler.logInfo('Qoder Wiki Export extension is being deactivated');
+    } else {
+      console.log('Qoder Wiki Export extension is being deactivated');
+    }
+    
+    // Dispose of resources manually if needed
+    // Note: VSCode automatically disposes of registered commands and subscriptions
+    // but we want to ensure proper cleanup of our services
+    
+    if (exportCommandInstance) {
+      exportCommandInstance.dispose();
+      exportCommandInstance = undefined;
+    }
+    
+    if (globalErrorHandler) {
+      globalErrorHandler.logInfo('Qoder Wiki Export extension deactivated successfully');
+      globalErrorHandler.dispose();
+      globalErrorHandler = undefined;
+    } else {
+      console.log('Qoder Wiki Export extension deactivated successfully');
+    }
+    
+  } catch (error) {
+    console.error('Error during extension deactivation:', error);
+  }
 }

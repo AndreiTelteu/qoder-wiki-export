@@ -14,6 +14,8 @@ import {
 import { ExportService } from '../services/exportService';
 import { QoderApiServiceImpl } from '../services/qoderApiService';
 import { DocumentSelector } from '../ui/documentSelector';
+import { ErrorHandler } from '../services/errorHandler';
+import { NotificationService } from '../services/notificationService';
 
 /**
  * Main export command handler that orchestrates the complete export workflow
@@ -23,14 +25,26 @@ export class ExportCommand {
   private exportService: ExportService;
   private qoderApiService: QoderApiServiceImpl;
   private documentSelector: DocumentSelector;
+  private errorHandler: ErrorHandler;
+  private notificationService: NotificationService;
 
   constructor(
     exportService?: ExportService,
     qoderApiService?: QoderApiServiceImpl,
-    documentSelector?: DocumentSelector
+    documentSelector?: DocumentSelector,
+    errorHandler?: ErrorHandler,
+    notificationService?: NotificationService
   ) {
-    this.qoderApiService = qoderApiService || new QoderApiServiceImpl();
-    this.exportService = exportService || new ExportService(this.qoderApiService);
+    this.errorHandler = errorHandler || new ErrorHandler();
+    this.notificationService = notificationService || new NotificationService();
+    this.qoderApiService = qoderApiService || new QoderApiServiceImpl(this.errorHandler);
+    this.exportService = exportService || new ExportService(
+      this.qoderApiService, 
+      undefined, 
+      undefined, 
+      this.errorHandler, 
+      this.notificationService
+    );
     this.documentSelector = documentSelector || new DocumentSelector();
   }
 
@@ -40,13 +54,16 @@ export class ExportCommand {
    */
   async execute(): Promise<void> {
     try {
+      this.errorHandler.logInfo('Starting export command execution');
+
       // Step 1: Check Qoder availability and authentication
       await this.validateQoderSetup();
 
       // Step 2: Retrieve available wiki catalogs
       const catalogs = await this.retrieveWikiCatalogs();
       if (!catalogs || catalogs.length === 0) {
-        vscode.window.showInformationMessage(
+        this.errorHandler.logInfo('No wiki documents found');
+        this.notificationService.showQuickInfo(
           'No wiki documents found. Generate some documentation with Qoder first.'
         );
         return;
@@ -55,14 +72,14 @@ export class ExportCommand {
       // Step 3: Let user select documents to export
       const selectedDocuments = await this.selectDocumentsForExport(catalogs);
       if (!selectedDocuments || selectedDocuments.length === 0) {
-        // User cancelled or no documents selected
+        this.errorHandler.logInfo('User cancelled document selection or no documents selected');
         return;
       }
 
       // Step 4: Let user choose export destination
       const destination = await this.selectExportDestination();
       if (!destination) {
-        // User cancelled destination selection
+        this.errorHandler.logInfo('User cancelled destination selection');
         return;
       }
 
@@ -70,6 +87,10 @@ export class ExportCommand {
       await this.executeExportWithProgress(selectedDocuments, destination);
 
     } catch (error) {
+      this.errorHandler.handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        'Export command execution'
+      );
       await this.handleExportError(error);
     }
   }
@@ -245,128 +266,92 @@ export class ExportCommand {
    * Handles and displays export results to the user
    */
   private async handleExportResult(result: ExportResult, destination: string): Promise<void> {
+    this.errorHandler.logInfo('Handling export result', {
+      success: result.success,
+      exportedCount: result.exportedCount,
+      failedCount: result.failedCount,
+      errorCount: result.errors.length
+    });
+
     if (result.success && result.exportedCount > 0) {
       // Successful export
-      const message = `Successfully exported ${result.exportedCount} document${result.exportedCount === 1 ? '' : 's'} to ${destination}`;
-      const action = await vscode.window.showInformationMessage(
-        message,
-        'Open Folder',
-        'Show in Explorer'
-      );
-      
-      if (action === 'Open Folder') {
-        // Open the destination folder in VSCode
-        const uri = vscode.Uri.file(destination);
-        await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: false });
-      } else if (action === 'Show in Explorer') {
-        // Reveal the folder in system file explorer
-        const uri = vscode.Uri.file(destination);
-        await vscode.commands.executeCommand('revealFileInOS', uri);
-      }
+      this.notificationService.showExportSuccess(result);
       
     } else if (result.exportedCount === 0 && result.failedCount === 0) {
       // No documents to export
-      vscode.window.showInformationMessage('No documents were available for export.');
+      this.notificationService.showQuickInfo('No documents were available for export.');
       
     } else if (result.exportedCount > 0 && result.failedCount > 0) {
       // Partial success
-      const message = `Export completed with warnings: ${result.exportedCount} succeeded, ${result.failedCount} failed.`;
-      const action = await vscode.window.showWarningMessage(
-        message,
-        'View Details',
-        'Open Folder'
-      );
-      
-      if (action === 'View Details') {
-        await this.showExportErrors(result.errors);
-      } else if (action === 'Open Folder') {
-        const uri = vscode.Uri.file(destination);
-        await vscode.commands.executeCommand('revealFileInOS', uri);
-      }
+      this.notificationService.showPartialSuccess(result);
       
     } else {
       // Complete failure
-      const message = `Export failed: ${result.failedCount} document${result.failedCount === 1 ? '' : 's'} could not be exported.`;
-      const action = await vscode.window.showErrorMessage(
-        message,
-        'View Details'
-      );
-      
-      if (action === 'View Details') {
-        await this.showExportErrors(result.errors);
-      }
+      this.notificationService.showExportFailure(result);
     }
   }
 
-  /**
-   * Shows detailed error information to the user
-   */
-  private async showExportErrors(errors: ExportError[]): Promise<void> {
-    if (!errors || errors.length === 0) {
-      return;
-    }
 
-    // Create a summary of errors
-    const errorSummary = errors.map((error, index) => {
-      const documentInfo = error.documentId ? ` (Document: ${error.documentId})` : '';
-      return `${index + 1}. ${error.message}${documentInfo}`;
-    }).join('\n');
-
-    const message = `Export Errors:\n\n${errorSummary}`;
-    
-    // Show in a new document for better readability
-    const doc = await vscode.workspace.openTextDocument({
-      content: message,
-      language: 'plaintext'
-    });
-    
-    await vscode.window.showTextDocument(doc);
-  }
 
   /**
    * Handles and displays export errors to the user
    */
   private async handleExportError(error: unknown): Promise<void> {
-    let message: string;
+    if (error instanceof ExportError && error.type === ExportErrorType.USER_CANCELLED) {
+      // Don't show error for user cancellation
+      this.errorHandler.logInfo('Export cancelled by user');
+      return;
+    }
+
+    // The error has already been handled by the ErrorHandler in most cases
+    // This is just for any remaining edge cases or to provide retry functionality
+    
     let actions: string[] = [];
 
     if (error instanceof ExportError) {
       switch (error.type) {
         case ExportErrorType.QODER_NOT_AVAILABLE:
-          message = error.message;
           actions = ['Open Extensions'];
           break;
           
         case ExportErrorType.AUTHENTICATION_FAILED:
-          message = error.message;
           actions = ['Retry'];
           break;
-          
-        case ExportErrorType.USER_CANCELLED:
-          // Don't show error for user cancellation
-          return;
           
         case ExportErrorType.API_ERROR:
         case ExportErrorType.FILE_SYSTEM_ERROR:
         case ExportErrorType.CONVERSION_ERROR:
         default:
-          message = `Export failed: ${error.message}`;
-          actions = ['Retry'];
+          actions = ['Retry', 'View Log'];
           break;
       }
     } else {
-      message = `Export failed: ${error instanceof Error ? error.message : 'Unknown error occurred'}`;
-      actions = ['Retry'];
+      actions = ['Retry', 'View Log'];
     }
 
-    const action = await vscode.window.showErrorMessage(message, ...actions);
+    // Show a simple retry option since detailed error handling is done elsewhere
+    const action = await vscode.window.showErrorMessage(
+      'Export operation failed. Check the output log for details.',
+      ...actions
+    );
     
     if (action === 'Open Extensions') {
       vscode.commands.executeCommand('workbench.view.extensions');
     } else if (action === 'Retry') {
       // Retry the export operation
       setTimeout(() => this.execute(), 1000);
+    } else if (action === 'View Log') {
+      this.errorHandler.showOutputChannel();
     }
+  }
+
+  /**
+   * Disposes of resources used by the export command.
+   */
+  public dispose(): void {
+    this.errorHandler.dispose();
+    this.exportService.dispose();
+    this.qoderApiService.dispose();
   }
 }
 

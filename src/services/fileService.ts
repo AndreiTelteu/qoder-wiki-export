@@ -17,8 +17,18 @@ export class FileService {
     try {
       await fs.mkdir(dirPath, { recursive: true });
     } catch (error) {
+      // Determine specific error type based on error code
+      let errorType = ExportErrorType.FILE_SYSTEM_ERROR;
+      const nodeError = error as NodeJS.ErrnoException;
+      
+      if (nodeError.code === 'EACCES' || nodeError.code === 'EPERM') {
+        errorType = ExportErrorType.PERMISSION_DENIED;
+      } else if (nodeError.code === 'ENOSPC') {
+        errorType = ExportErrorType.DISK_SPACE_ERROR;
+      }
+
       throw new ExportError(
-        ExportErrorType.FILE_SYSTEM_ERROR,
+        errorType,
         `Failed to create directory: ${dirPath}`,
         undefined,
         error
@@ -41,8 +51,18 @@ export class FileService {
       
       await fs.writeFile(filePath, content, 'utf8');
     } catch (error) {
+      // Determine specific error type based on error code
+      let errorType = ExportErrorType.FILE_SYSTEM_ERROR;
+      const nodeError = error as NodeJS.ErrnoException;
+      
+      if (nodeError.code === 'EACCES' || nodeError.code === 'EPERM') {
+        errorType = ExportErrorType.PERMISSION_DENIED;
+      } else if (nodeError.code === 'ENOSPC') {
+        errorType = ExportErrorType.DISK_SPACE_ERROR;
+      }
+
       throw new ExportError(
-        ExportErrorType.FILE_SYSTEM_ERROR,
+        errorType,
         `Failed to write file: ${filePath}`,
         undefined,
         error
