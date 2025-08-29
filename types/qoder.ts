@@ -105,7 +105,15 @@ export interface MarkdownExporter {
   export(
     documents: WikiDocument[],
     destination: string,
-    options?: MarkdownExportOptions
+    options?: MarkdownExportOptions,
+    progressCallback?: ProgressCallback
+  ): Promise<ExportResult>;
+  
+  exportCatalogs(
+    catalogs: WikiCatalog[],
+    destination: string,
+    options?: MarkdownExportOptions,
+    progressCallback?: ProgressCallback
   ): Promise<ExportResult>;
 }
 

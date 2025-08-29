@@ -25,14 +25,13 @@
 
 - [x] 4. Implement FileService for file system operations
 
-
   - Create methods for directory creation and file writing operations
   - Implement file existence checking and overwrite confirmation logic
   - Add filename sanitization for special characters and invalid names
   - Create utility methods for path manipulation and directory structure creation
   - _Requirements: 4.2, 4.3, 4.4_
 
-- [ ] 5. Create MarkdownExporter for document export functionality
+- [x] 5. Create MarkdownExporter for document export functionality
 
   - Implement export() method that processes WikiDocument arrays
   - Add logic to preserve original markdown content and formatting
