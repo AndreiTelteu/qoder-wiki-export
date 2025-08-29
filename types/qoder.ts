@@ -39,11 +39,17 @@ export interface ExportResult {
   outputPath: string;
 }
 
-export interface ExportError {
-  type: ExportErrorType;
-  message: string;
-  documentId?: string;
-  details?: any;
+// Export Error class for consistent error handling
+export class ExportError extends Error {
+  constructor(
+    public readonly type: ExportErrorType,
+    message: string,
+    public readonly documentId?: string,
+    public readonly details?: any
+  ) {
+    super(message);
+    this.name = 'ExportError';
+  }
 }
 
 export enum ExportErrorType {

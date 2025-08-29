@@ -14,7 +14,7 @@
   - Add TypeScript definitions for VSCode extension API usage
   - _Requirements: 1.1, 2.1, 2.2_
 
-- [ ] 3. Create QoderApiService for integration with Qoder extension
+- [x] 3. Create QoderApiService for integration with Qoder extension
 
   - Implement isQoderAvailable() method to check for Qoder extension presence
   - Create isUserLoggedIn() method using qoderApi.auth.isLogin()
