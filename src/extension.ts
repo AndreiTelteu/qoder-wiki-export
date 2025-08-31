@@ -114,11 +114,75 @@ export function activate(context: vscode.ExtensionContext) {
  * @param context - VSCode extension context
  */
 function registerUtilityCommands(context: vscode.ExtensionContext) {
+  // Command to debug available extensions
+  const debugExtensionsCommand = vscode.commands.registerCommand(
+    'qoderWikiExport.debugExtensions',
+    () => {
+      const allExtensions = vscode.extensions.all;
+      const extensionList = allExtensions.map(ext => ({
+        id: ext.id,
+        displayName: ext.packageJSON?.displayName || 'Unknown',
+        isActive: ext.isActive,
+        exports: ext.exports ? Object.keys(ext.exports) : []
+      }));
+
+      // Filter for potential Qoder extensions
+      const qoderExtensions = extensionList.filter(ext => 
+        ext.id.toLowerCase().includes('qoder') || 
+        ext.id.toLowerCase().includes('aicoding') ||
+        ext.displayName.toLowerCase().includes('qoder') ||
+        ext.displayName.toLowerCase().includes('ai coding')
+      );
+
+      const message = `Found ${qoderExtensions.length} potential Qoder extensions:\n\n${
+        qoderExtensions.map(ext => 
+          `ID: ${ext.id}\nName: ${ext.displayName}\nActive: ${ext.isActive}\nExports: ${ext.exports.join(', ')}\n`
+        ).join('\n')
+      }`;
+
+      vscode.window.showInformationMessage(message, { modal: true });
+      
+      // Also log all extensions to console for debugging
+      console.log('All extensions:', extensionList);
+      console.log('Qoder-related extensions:', qoderExtensions);
+    }
+  );
+
   // Command to check Qoder extension status
   const checkQoderStatusCommand = vscode.commands.registerCommand(
     'qoderWikiExport.checkQoderStatus',
     async () => {
       try {
+        // First, let's debug available extensions
+        const allExtensions = vscode.extensions.all;
+        const qoderExtensions = allExtensions.filter(ext => 
+          ext.id.toLowerCase().includes('qoder') || 
+          ext.id.toLowerCase().includes('aicoding') ||
+          ext.packageJSON?.displayName?.toLowerCase().includes('qoder') ||
+          ext.packageJSON?.displayName?.toLowerCase().includes('ai coding')
+        );
+
+        console.log('All Qoder-related extensions:', qoderExtensions.map(ext => ({
+          id: ext.id,
+          displayName: ext.packageJSON?.displayName,
+          isActive: ext.isActive,
+          exports: ext.exports ? Object.keys(ext.exports) : []
+        })));
+
+        // Show basic info about found extensions
+        if (qoderExtensions.length > 0) {
+          const extensionInfo = qoderExtensions.map(ext => 
+            `ID: ${ext.id}\nActive: ${ext.isActive}\nExports: ${ext.exports ? Object.keys(ext.exports).join(', ') : 'none'}`
+          ).join('\n\n');
+          
+          vscode.window.showInformationMessage(
+            `Found ${qoderExtensions.length} Qoder extension(s):\n\n${extensionInfo}`,
+            { modal: true }
+          );
+        } else {
+          vscode.window.showWarningMessage('No Qoder-related extensions found');
+        }
+
         const { QoderApiServiceImpl } = await import('./services/qoderApiService');
         const qoderService = new QoderApiServiceImpl(globalErrorHandler);
         
@@ -204,6 +268,7 @@ Commands:
     }
   );
 
+  context.subscriptions.push(debugExtensionsCommand);
   context.subscriptions.push(checkQoderStatusCommand);
   context.subscriptions.push(showInfoCommand);
 }

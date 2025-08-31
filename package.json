@@ -21,9 +21,10 @@
     "onCommand:qoderWikiExport.exportWiki",
     "onCommand:qoderWikiExport.exportSelected",
     "onCommand:qoderWikiExport.checkQoderStatus",
+    "onCommand:qoderWikiExport.debugExtensions",
     "onCommand:qoderWikiExport.showInfo"
   ],
-  "main": "./out/extension.js",
+  "main": "./out/src/extension.js",
   "contributes": {
     "commands": [
       {
@@ -45,6 +46,12 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "qoderWikiExport.debugExtensions",
+        "title": "Debug Available Extensions",
+        "category": "Qoder Wiki Export",
+        "icon": "$(bug)"
+      },
+      {
         "command": "qoderWikiExport.showInfo",
         "title": "Show Extension Info",
         "category": "Qoder Wiki Export",
@@ -58,7 +65,8 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package --allow-missing-repository"
   },
   "devDependencies": {
     "@types/vscode": "^1.74.0",
@@ -68,8 +76,6 @@
     "eslint": "^8.28.0",
     "typescript": "^4.9.4"
   },
-  "dependencies": {},
-  "extensionDependencies": [
-    "aicoding.aicoding-agent"
-  ]
+  "dependencies": {}
+
 }

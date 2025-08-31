@@ -4,6 +4,7 @@ import {
   WikiCatalog,
   WikiDocument,
   QoderApi,
+  QoderApiResponse,
   ExportError,
   ExportErrorType,
 } from "../../types/qoder";
@@ -42,17 +43,33 @@ export class QoderApiServiceImpl implements QoderApiService {
         return false;
       }
 
-      // Try to access the qoderApi from the extension's exports
+      // Log detailed information about the extension
+      this.errorHandler.logInfo(`Extension found: ${qoderExtension.id}, Active: ${qoderExtension.isActive}`);
+      
+      // Access the exports directly
       const exports = qoderExtension.exports;
-      if (!exports || !exports.qoderApi) {
+      this.errorHandler.logInfo(`Extension exports: ${exports ? Object.keys(exports).join(', ') : 'none'}`);
+      
+      if (!exports) {
+        this.errorHandler.logWarning("Extension exports is null or undefined");
+        return false;
+      }
+
+      // Check for required exports: repoWiki and auth
+      if (!exports.repoWiki || !exports.auth) {
         this.errorHandler.logWarning(
-          "Qoder extension active but qoderApi not available in exports"
+          `Qoder extension missing required exports. Available: ${Object.keys(exports).join(', ')}, Required: repoWiki, auth`
         );
         return false;
       }
 
-      this.qoderApi = exports.qoderApi;
-      this.errorHandler.logInfo("Qoder extension API successfully accessed");
+      // Create a qoderApi-like object from the direct exports
+      this.qoderApi = {
+        repoWiki: exports.repoWiki,
+        auth: exports.auth
+      };
+      
+      this.errorHandler.logInfo("Qoder extension API successfully accessed with repoWiki and auth exports");
       return true;
     } catch (error) {
       this.errorHandler.handleError(
@@ -168,12 +185,18 @@ export class QoderApiServiceImpl implements QoderApiService {
       }
 
       this.errorHandler.logInfo("Retrieving wiki catalogs from Qoder API");
-      const catalogs = await this.qoderApi.repoWiki.getWikiCatalogs();
+      const response: QoderApiResponse<WikiCatalog[]> = await this.qoderApi.repoWiki.getWikiCatalogs();
 
-      if (!Array.isArray(catalogs)) {
+      // Add debugging logs
+      console.log("Raw API response:", JSON.stringify(response, null, 2));
+      this.errorHandler.logInfo(`Raw API response type: ${typeof response}`);
+      this.errorHandler.logInfo(`Raw API response keys: ${response ? Object.keys(response).join(', ') : 'none'}`);
+
+      // The API returns an object with a Result property containing the array
+      if (!response || typeof response !== "object") {
         const error = new ExportError(
           ExportErrorType.API_ERROR,
-          "Invalid response format from getWikiCatalogs API call."
+          `Invalid response format from getWikiCatalogs API call. Expected object, got ${typeof response}`
         );
         this.errorHandler.handleError(
           error,
@@ -183,9 +206,26 @@ export class QoderApiServiceImpl implements QoderApiService {
         throw error;
       }
 
+      // Extract catalogs from Result property
+      const catalogs = response.Result;
+      
+      if (!Array.isArray(catalogs)) {
+        const error = new ExportError(
+          ExportErrorType.API_ERROR,
+          `Invalid Result format from getWikiCatalogs API call. Expected array, got ${typeof catalogs}. Response structure: ${Object.keys(response).join(', ')}`
+        );
+        this.errorHandler.handleError(
+          error,
+          "Wiki catalogs result validation",
+          false
+        );
+        throw error;
+      }
+
       this.errorHandler.logInfo(
-        `Successfully retrieved ${catalogs.length} wiki catalogs`
+        `Successfully retrieved ${catalogs.length} wiki catalogs from Result property`
       );
+      console.log("Extracted catalogs:", JSON.stringify(catalogs, null, 2));
       return catalogs;
     } catch (error) {
       if (error instanceof ExportError) {
@@ -277,12 +317,17 @@ export class QoderApiServiceImpl implements QoderApiService {
       this.errorHandler.logInfo(
         `Retrieving wiki content for document: ${documentId}`
       );
-      const document = await this.qoderApi.repoWiki.getWikiContent(documentId);
+      const response: QoderApiResponse<any> = await this.qoderApi.repoWiki.getWikiContent(documentId);
 
-      if (!document || typeof document !== "object") {
+      // Add debugging logs
+      console.log(`Raw getWikiContent response for ${documentId}:`, JSON.stringify(response, null, 2));
+      this.errorHandler.logInfo(`getWikiContent response type: ${typeof response}`);
+      this.errorHandler.logInfo(`getWikiContent response keys: ${response ? Object.keys(response).join(', ') : 'none'}`);
+
+      if (!response || typeof response !== "object") {
         const error = new ExportError(
           ExportErrorType.API_ERROR,
-          `Invalid response format from getWikiContent API call for document ID: ${documentId}`
+          `Invalid response format from getWikiContent API call for document ID: ${documentId}. Expected object, got ${typeof response}`
         );
         this.errorHandler.handleError(
           error,
@@ -292,15 +337,28 @@ export class QoderApiServiceImpl implements QoderApiService {
         throw error;
       }
 
-      // Validate required properties
-      if (
-        !document.id ||
-        !document.name ||
-        typeof document.content !== "string"
-      ) {
+      // Extract document from Result property
+      const document = response.Result;
+      
+      if (!document || typeof document !== "object") {
         const error = new ExportError(
           ExportErrorType.API_ERROR,
-          `Invalid document structure returned for document ID: ${documentId}. Missing required properties.`
+          `Invalid Result format from getWikiContent API call for document ID: ${documentId}. Expected object, got ${typeof document}. Response structure: ${Object.keys(response).join(', ')}`
+        );
+        this.errorHandler.handleError(
+          error,
+          `Wiki content result validation for ${documentId}`,
+          false
+        );
+        throw error;
+      }
+
+      // Validate required properties - adjust based on actual API structure
+      if (!document.content || typeof document.content !== "string") {
+        console.log(`Document structure for ${documentId}:`, JSON.stringify(document, null, 2));
+        const error = new ExportError(
+          ExportErrorType.API_ERROR,
+          `Invalid document structure returned for document ID: ${documentId}. Missing or invalid content property. Available properties: ${Object.keys(document).join(', ')}`
         );
         this.errorHandler.handleError(
           error,
@@ -310,10 +368,18 @@ export class QoderApiServiceImpl implements QoderApiService {
         throw error;
       }
 
+      // Create a normalized WikiDocument structure
+      const normalizedDocument = {
+        id: documentId,
+        name: document.name || `Document ${documentId}`,
+        content: document.content
+      };
+
       this.errorHandler.logInfo(
-        `Successfully retrieved wiki content for document: ${document.name} (${documentId})`
+        `Successfully retrieved wiki content for document: ${normalizedDocument.name} (${documentId})`
       );
-      return document;
+      console.log(`Normalized document for ${documentId}:`, JSON.stringify(normalizedDocument, null, 2));
+      return normalizedDocument;
     } catch (error) {
       if (error instanceof ExportError) {
         throw error;

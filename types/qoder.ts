@@ -15,7 +15,7 @@ export interface WikiDocument {
   id: string;
   name: string;
   content: string;
-  status: string;
+  status?: string;
 }
 
 export type DocumentStatus = 'completed' | 'failed' | 'generating' | 'paused' | 'unknown';
@@ -170,9 +170,16 @@ export interface QoderApi {
     isLogin(): boolean;
   };
   repoWiki: {
-    getWikiCatalogs(): Promise<WikiCatalog[]>;
-    getWikiContent(documentId: string): Promise<WikiDocument>;
+    getWikiCatalogs(): Promise<QoderApiResponse<WikiCatalog[]>>;
+    getWikiContent(documentId: string): Promise<QoderApiResponse<any>>;
   };
+}
+
+// API Response wrapper - Qoder API returns responses with a Result property
+export interface QoderApiResponse<T> {
+  Result: T;
+  errorCode?: string;
+  [key: string]: any;
 }
 
 // Extension activation context
