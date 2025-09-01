@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { MarkdownExporter } from '../exporters/markdownExporter';
-import { WikiDocument, WikiCatalog, MarkdownExportOptions } from '../../types/qoder';
+import { WikiDocument, WikiCatalog, MarkdownExportOptions, ExportStructureType } from '../../types/qoder';
 
 /**
  * Manual test for MarkdownExporter functionality
@@ -113,7 +113,8 @@ async function testIndexFileCreation(exporter: MarkdownExporter, tempDir: string
   const options: MarkdownExportOptions = {
     preserveHierarchy: true,
     includeTableOfContents: false,
-    createIndexFile: true
+    createIndexFile: true,
+    exportStructure: ExportStructureType.FLAT
   };
 
   const result = await exporter.export(documents, testDir, options);
@@ -169,7 +170,8 @@ async function testCatalogHierarchy(exporter: MarkdownExporter, tempDir: string)
   const options: MarkdownExportOptions = {
     preserveHierarchy: true,
     includeTableOfContents: false,
-    createIndexFile: true
+    createIndexFile: true,
+    exportStructure: ExportStructureType.FLAT
   };
 
   const result = await exporter.exportCatalogs(catalogs, testDir, options);

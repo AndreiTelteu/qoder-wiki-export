@@ -6,10 +6,12 @@ import {
   ExportError, 
   ExportErrorType, 
   MarkdownExportOptions,
+  ExportStructureType,
   ProgressCallback,
   ProgressInfo
 } from '../../types/qoder';
 import { FileService } from '../services/fileService';
+import { QoderApiServiceImpl } from '../services/qoderApiService';
 
 /**
  * MarkdownExporter handles the export of WikiDocument arrays to Markdown files.
@@ -17,9 +19,11 @@ import { FileService } from '../services/fileService';
  */
 export class MarkdownExporter {
   private fileService: FileService;
+  private qoderApiService: QoderApiServiceImpl | undefined;
 
-  constructor(fileService?: FileService) {
+  constructor(fileService?: FileService, qoderApiService?: QoderApiServiceImpl) {
     this.fileService = fileService || new FileService();
+    this.qoderApiService = qoderApiService;
   }
 
   /**
@@ -45,74 +49,12 @@ export class MarkdownExporter {
       // Ensure destination directory exists
       await this.fileService.createDirectory(destination);
 
-      // Process each document
-      for (let i = 0; i < documents.length; i++) {
-        const document = documents[i];
-        if (!document) {
-          continue;
-        }
-        
-        // Update progress
-        if (progressCallback) {
-          const progressInfo: ProgressInfo = {
-            currentDocument: document.name,
-            completed: i,
-            total: documents.length,
-            percentage: Math.round((i / documents.length) * 100)
-          };
-          progressCallback(progressInfo);
-        }
-
-        try {
-          await this.exportSingleDocument(document, destination, exportOptions);
-          exportedCount++;
-        } catch (error) {
-          failedCount++;
-          if (error instanceof ExportError) {
-            errors.push(error);
-          } else {
-            errors.push(new ExportError(
-              ExportErrorType.CONVERSION_ERROR,
-              `Failed to export document: ${document.name}`,
-              document.id,
-              error
-            ));
-          }
-        }
+      // Use the new export structure logic
+      if (exportOptions.exportStructure === ExportStructureType.FLAT) {
+        return await this.exportDocumentsFlatStructure(documents, destination, exportOptions, progressCallback);
+      } else {
+        return await this.exportDocumentsTreeStructure(documents, destination, exportOptions, progressCallback);
       }
-
-      // Create index file if requested
-      if (exportOptions.createIndexFile && documents.length > 0) {
-        try {
-          await this.createIndexFile(documents, destination, exportOptions);
-        } catch (error) {
-          errors.push(new ExportError(
-            ExportErrorType.FILE_SYSTEM_ERROR,
-            'Failed to create index file',
-            undefined,
-            error
-          ));
-        }
-      }
-
-      // Final progress update
-      if (progressCallback) {
-        const finalProgress: ProgressInfo = {
-          currentDocument: 'Export complete',
-          completed: documents.length,
-          total: documents.length,
-          percentage: 100
-        };
-        progressCallback(finalProgress);
-      }
-
-      return {
-        success: errors.length === 0,
-        exportedCount,
-        failedCount,
-        errors,
-        outputPath: destination
-      };
 
     } catch (error) {
       // Handle catastrophic failures
@@ -133,6 +75,236 @@ export class MarkdownExporter {
         outputPath: destination
       };
     }
+  }
+
+  /**
+   * Exports WikiDocument arrays using flat structure (all files in root with numbered names)
+   * @param documents - Array of WikiDocument objects with content
+   * @param destination - Destination directory
+   * @param options - Export options
+   * @param progressCallback - Progress callback
+   * @returns Export result
+   */
+  private async exportDocumentsFlatStructure(
+    documents: WikiDocument[],
+    destination: string,
+    options: MarkdownExportOptions,
+    progressCallback?: ProgressCallback
+  ): Promise<ExportResult> {
+    const errors: ExportError[] = [];
+    let exportedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < documents.length; i++) {
+      const document = documents[i];
+      if (!document) continue;
+      
+      // Update progress
+      if (progressCallback) {
+        const progressInfo: ProgressInfo = {
+          currentDocument: document.name,
+          completed: i,
+          total: documents.length,
+          percentage: Math.round((i / documents.length) * 100)
+        };
+        progressCallback(progressInfo);
+      }
+
+      try {
+        // Simple numbering: index + 1
+        const documentNumber = i + 1;
+        const cleanName = this.cleanDocumentName(document.name);
+        const filename = `${documentNumber}. ${cleanName}.md`;
+        const filePath = path.join(destination, filename);
+        
+        // Process the actual document content
+        let content = this.processMarkdownContent(document.content, options);
+        
+        // Add title to content if needed
+        if (!content.startsWith('#')) {
+          content = `# ${documentNumber}. ${cleanName}\n\n${content}`;
+        }
+        
+        await this.fileService.writeFile(filePath, content);
+        exportedCount++;
+      } catch (error) {
+        failedCount++;
+        errors.push(new ExportError(
+          ExportErrorType.CONVERSION_ERROR,
+          `Failed to export ${document.name}`,
+          document.id,
+          error
+        ));
+      }
+    }
+
+    // Create index file if requested
+    if (options.createIndexFile && documents.length > 0) {
+      try {
+        await this.createIndexFileForDocuments(documents, destination, options);
+      } catch (error) {
+        errors.push(new ExportError(
+          ExportErrorType.FILE_SYSTEM_ERROR,
+          'Failed to create index file',
+          undefined,
+          error
+        ));
+      }
+    }
+
+    // Final progress update
+    if (progressCallback) {
+      const finalProgress: ProgressInfo = {
+        currentDocument: 'Export complete',
+        completed: documents.length,
+        total: documents.length,
+        percentage: 100
+      };
+      progressCallback(finalProgress);
+    }
+
+    return {
+      success: errors.length === 0,
+      exportedCount,
+      failedCount,
+      errors,
+      outputPath: destination
+    };
+  }
+
+  /**
+   * Exports WikiDocument arrays using tree structure (organized folders)
+   * @param documents - Array of WikiDocument objects with content
+   * @param destination - Destination directory
+   * @param options - Export options
+   * @param progressCallback - Progress callback
+   * @returns Export result
+   */
+  private async exportDocumentsTreeStructure(
+    documents: WikiDocument[],
+    destination: string,
+    options: MarkdownExportOptions,
+    progressCallback?: ProgressCallback
+  ): Promise<ExportResult> {
+    const errors: ExportError[] = [];
+    let exportedCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < documents.length; i++) {
+      const document = documents[i];
+      if (!document) continue;
+      
+      // Update progress
+      if (progressCallback) {
+        const progressInfo: ProgressInfo = {
+          currentDocument: document.name,
+          completed: i,
+          total: documents.length,
+          percentage: Math.round((i / documents.length) * 100)
+        };
+        progressCallback(progressInfo);
+      }
+
+      try {
+        // Simple numbering: index + 1
+        const documentNumber = i + 1;
+        const cleanName = this.cleanDocumentName(document.name);
+        const folderName = `${documentNumber}. ${cleanName}`;
+        const folderPath = path.join(destination, folderName);
+        
+        // Create folder
+        await this.fileService.createDirectory(folderPath);
+        
+        // Create README.md with the document content
+        const readmePath = path.join(folderPath, 'README.md');
+        let content = this.processMarkdownContent(document.content, options);
+        
+        // Add title to content if needed
+        if (!content.startsWith('#')) {
+          content = `# ${documentNumber}. ${cleanName}\n\n${content}`;
+        }
+        
+        await this.fileService.writeFile(readmePath, content);
+        exportedCount++;
+      } catch (error) {
+        failedCount++;
+        errors.push(new ExportError(
+          ExportErrorType.CONVERSION_ERROR,
+          `Failed to export ${document.name}`,
+          document.id,
+          error
+        ));
+      }
+    }
+
+    // Create index file if requested
+    if (options.createIndexFile && documents.length > 0) {
+      try {
+        await this.createIndexFileForDocuments(documents, destination, options);
+      } catch (error) {
+        errors.push(new ExportError(
+          ExportErrorType.FILE_SYSTEM_ERROR,
+          'Failed to create index file',
+          undefined,
+          error
+        ));
+      }
+    }
+
+    // Final progress update
+    if (progressCallback) {
+      const finalProgress: ProgressInfo = {
+        currentDocument: 'Export complete',
+        completed: documents.length,
+        total: documents.length,
+        percentage: 100
+      };
+      progressCallback(finalProgress);
+    }
+
+    return {
+      success: errors.length === 0,
+      exportedCount,
+      failedCount,
+      errors,
+      outputPath: destination
+    };
+  }
+
+  /**
+   * Creates an index file for exported documents
+   */
+  private async createIndexFileForDocuments(
+    documents: WikiDocument[],
+    destination: string,
+    options: MarkdownExportOptions
+  ): Promise<void> {
+    let indexContent = '# Exported Documentation\n\n';
+    indexContent += 'This index provides navigation links to all exported documents.\n\n';
+    indexContent += '## Documents\n\n';
+
+    for (let i = 0; i < documents.length; i++) {
+      const document = documents[i];
+      if (!document) continue;
+      
+      const documentNumber = i + 1;
+      const cleanName = this.cleanDocumentName(document.name);
+      
+      if (options.exportStructure === ExportStructureType.FLAT) {
+        const filename = `${documentNumber}. ${cleanName}.md`;
+        indexContent += `- [${documentNumber}. ${cleanName}](./${filename})\n`;
+      } else {
+        const folderName = `${documentNumber}. ${cleanName}`;
+        indexContent += `- [${documentNumber}. ${cleanName}](./${folderName}/README.md)\n`;
+      }
+    }
+
+    indexContent += '\n---\n\n';
+    indexContent += `*Generated on ${new Date().toISOString()}*\n`;
+    indexContent += `*Total documents: ${documents.length}*\n`;
+
+    const indexPath = path.join(destination, 'index.md');
+    await this.fileService.writeFile(indexPath, indexContent);
   }
 
   /**
@@ -158,78 +330,16 @@ export class MarkdownExporter {
       // Ensure destination directory exists
       await this.fileService.createDirectory(destination);
 
-      // Flatten catalog hierarchy to get all documents with their paths
-      const catalogItems = this.flattenCatalogHierarchy(catalogs);
-      const totalItems = catalogItems.length;
+      // Assign numbers to all documents for consistent naming
+      const numberMap = this.assignDocumentNumbers(catalogs);
 
-      // Process each catalog item
-      for (let i = 0; i < catalogItems.length; i++) {
-        const item = catalogItems[i];
-        if (!item) {
-          continue;
-        }
-        
-        // Update progress
-        if (progressCallback) {
-          const progressInfo: ProgressInfo = {
-            currentDocument: item.name,
-            completed: i,
-            total: totalItems,
-            percentage: Math.round((i / totalItems) * 100)
-          };
-          progressCallback(progressInfo);
-        }
-
-        try {
-          await this.exportCatalogItem(item, destination, exportOptions);
-          exportedCount++;
-        } catch (error) {
-          failedCount++;
-          if (error instanceof ExportError) {
-            errors.push(error);
-          } else {
-            errors.push(new ExportError(
-              ExportErrorType.CONVERSION_ERROR,
-              `Failed to export catalog item: ${item.name}`,
-              item.id,
-              error
-            ));
-          }
-        }
+      if (exportOptions.exportStructure === ExportStructureType.FLAT) {
+        // Flat structure: all files in root with numbered names
+        return await this.exportFlatStructure(catalogs, destination, exportOptions, progressCallback, numberMap);
+      } else {
+        // Tree structure: folders with README files
+        return await this.exportTreeStructure(catalogs, destination, exportOptions, progressCallback, numberMap);
       }
-
-      // Create hierarchical index file if requested
-      if (exportOptions.createIndexFile && catalogItems.length > 0) {
-        try {
-          await this.createHierarchicalIndexFile(catalogs, destination, exportOptions);
-        } catch (error) {
-          errors.push(new ExportError(
-            ExportErrorType.FILE_SYSTEM_ERROR,
-            'Failed to create hierarchical index file',
-            undefined,
-            error
-          ));
-        }
-      }
-
-      // Final progress update
-      if (progressCallback) {
-        const finalProgress: ProgressInfo = {
-          currentDocument: 'Export complete',
-          completed: totalItems,
-          total: totalItems,
-          percentage: 100
-        };
-        progressCallback(finalProgress);
-      }
-
-      return {
-        success: errors.length === 0,
-        exportedCount,
-        failedCount,
-        errors,
-        outputPath: destination
-      };
 
     } catch (error) {
       // Handle catastrophic failures
@@ -252,6 +362,320 @@ export class MarkdownExporter {
       };
     }
   }
+  /**
+   * Exports catalogs using flat structure (all files in root with numbered names)
+   * @param catalogs - Array of wiki catalogs
+   * @param destination - Destination directory
+   * @param options - Export options
+   * @param progressCallback - Progress callback
+   * @param numberMap - Map of document IDs to numbering info
+   * @returns Export result
+   */
+  private async exportFlatStructure(
+    catalogs: WikiCatalog[],
+    destination: string,
+    options: MarkdownExportOptions,
+    progressCallback?: ProgressCallback,
+    numberMap?: Map<string, { number: string, cleanName: string }>
+  ): Promise<ExportResult> {
+    const errors: ExportError[] = [];
+    let exportedCount = 0;
+    let failedCount = 0;
+
+    // Flatten all catalogs to a simple list
+    const allCatalogs = this.flattenCatalogHierarchy(catalogs);
+    const completedCatalogs = allCatalogs.filter(c => c.status === 'completed');
+
+    for (let i = 0; i < completedCatalogs.length; i++) {
+      const catalog = completedCatalogs[i];
+      if (!catalog) continue;
+      
+      // Update progress
+      if (progressCallback) {
+        const progressInfo: ProgressInfo = {
+          currentDocument: catalog.name,
+          completed: i,
+          total: completedCatalogs.length,
+          percentage: Math.round((i / completedCatalogs.length) * 100)
+        };
+        progressCallback(progressInfo);
+      }
+
+      try {
+        // Get numbering info
+        const numberInfo = numberMap?.get(catalog.id);
+        const filename = numberInfo 
+          ? `${numberInfo.number}. ${numberInfo.cleanName}.md`
+          : this.generateFilename(catalog.name);
+        
+        const filePath = path.join(destination, filename);
+        
+        // Create content from API or placeholder
+        const content = await this.createContentFlat(catalog, numberInfo);
+        
+        await this.fileService.writeFile(filePath, content);
+        exportedCount++;
+      } catch (error) {
+        failedCount++;
+        errors.push(new ExportError(
+          ExportErrorType.CONVERSION_ERROR,
+          `Failed to export ${catalog.name}`,
+          catalog.id,
+          error
+        ));
+      }
+    }
+
+    // Final progress update
+    if (progressCallback) {
+      const finalProgress: ProgressInfo = {
+        currentDocument: 'Export complete',
+        completed: completedCatalogs.length,
+        total: completedCatalogs.length,
+        percentage: 100
+      };
+      progressCallback(finalProgress);
+    }
+
+    return {
+      success: errors.length === 0,
+      exportedCount,
+      failedCount,
+      errors,
+      outputPath: destination
+    };
+  }
+
+  /**
+   * Exports catalogs using tree structure (folders with README files)
+   * @param catalogs - Array of wiki catalogs
+   * @param destination - Destination directory
+   * @param options - Export options
+   * @param progressCallback - Progress callback
+   * @param numberMap - Map of document IDs to numbering info
+   * @returns Export result
+   */
+  private async exportTreeStructure(
+    catalogs: WikiCatalog[],
+    destination: string,
+    options: MarkdownExportOptions,
+    progressCallback?: ProgressCallback,
+    numberMap?: Map<string, { number: string, cleanName: string }>
+  ): Promise<ExportResult> {
+    const errors: ExportError[] = [];
+    let exportedCount = 0;
+    let failedCount = 0;
+
+    // Process hierarchically
+    const processLevel = async (items: WikiCatalog[], basePath: string, currentProgress: { completed: number, total: number }) => {
+      for (const catalog of items) {
+        if (catalog.status !== 'completed') {
+          continue;
+        }
+
+        // Update progress
+        if (progressCallback) {
+          const progressInfo: ProgressInfo = {
+            currentDocument: catalog.name,
+            completed: currentProgress.completed,
+            total: currentProgress.total,
+            percentage: Math.round((currentProgress.completed / currentProgress.total) * 100)
+          };
+          progressCallback(progressInfo);
+        }
+
+        try {
+          const numberInfo = numberMap?.get(catalog.id);
+          const folderName = numberInfo 
+            ? `${numberInfo.number}. ${numberInfo.cleanName}`
+            : this.cleanDocumentName(catalog.name);
+          
+          const folderPath = path.join(basePath, folderName);
+          
+          if (catalog.subCatalog && catalog.subCatalog.length > 0) {
+            // Create folder and README.md
+            await this.fileService.createDirectory(folderPath);
+            
+            const readmePath = path.join(folderPath, 'README.md');
+            const readmeContent = await this.createReadmeContent(catalog, numberInfo);
+            await this.fileService.writeFile(readmePath, readmeContent);
+            
+            // Process sub-catalogs
+            await processLevel(catalog.subCatalog, folderPath, currentProgress);
+          } else {
+            // Leaf document - create as .md file directly
+            const filename = `${folderName}.md`;
+            const filePath = path.join(basePath, filename);
+            const content = await this.createContentTree(catalog, numberInfo);
+            await this.fileService.writeFile(filePath, content);
+          }
+          
+          exportedCount++;
+          currentProgress.completed++;
+        } catch (error) {
+          failedCount++;
+          currentProgress.completed++;
+          errors.push(new ExportError(
+            ExportErrorType.CONVERSION_ERROR,
+            `Failed to export ${catalog.name}`,
+            catalog.id,
+            error
+          ));
+        }
+      }
+    };
+
+    const totalItems = this.flattenCatalogHierarchy(catalogs).filter(c => c.status === 'completed').length;
+    await processLevel(catalogs, destination, { completed: 0, total: totalItems });
+
+    // Final progress update
+    if (progressCallback) {
+      const finalProgress: ProgressInfo = {
+        currentDocument: 'Export complete',
+        completed: totalItems,
+        total: totalItems,
+        percentage: 100
+      };
+      progressCallback(finalProgress);
+    }
+
+    return {
+      success: errors.length === 0,
+      exportedCount,
+      failedCount,
+      errors,
+      outputPath: destination
+    };
+  }
+
+  /**
+   * Creates content for flat structure, fetching from API if available
+   */
+  private async createContentFlat(catalog: WikiCatalog, numberInfo?: { number: string, cleanName: string }): Promise<string> {
+    const title = numberInfo ? `${numberInfo.number}. ${numberInfo.cleanName}` : catalog.name;
+    
+    if (this.qoderApiService && catalog.status === 'completed') {
+      try {
+        // Use original document ID for API calls (extract from potentially encoded hierarchy path)
+        const originalId = this.getOriginalDocumentId(catalog.id);
+        const wikiDocument = await this.qoderApiService.getWikiContent(originalId);
+        let content = this.processMarkdownContent(wikiDocument.content, {
+          preserveHierarchy: true,
+          includeTableOfContents: false,
+          createIndexFile: false,
+          exportStructure: ExportStructureType.FLAT
+        });
+        
+        // Add title if not present
+        if (!content.startsWith('#')) {
+          content = `# ${title}\n\n${content}`;
+        }
+        return content;
+      } catch (error) {
+        // Fall back to placeholder if API call fails
+        console.warn(`Failed to fetch content for ${catalog.name}:`, error);
+      }
+    }
+    
+    // Placeholder content as fallback
+    let content = `# ${title}\n\n`;
+    content += `**Document ID:** ${catalog.id}\n`;
+    content += `**Status:** ${catalog.status}\n\n`;
+    content += `This document was exported from Qoder wiki catalog.\n\n`;
+    content += `*Generated on ${new Date().toISOString()}*\n`;
+    return content;
+  }
+
+  /**
+   * Creates README content for tree structure
+   */
+  private async createReadmeContent(catalog: WikiCatalog, numberInfo?: { number: string, cleanName: string }): Promise<string> {
+    const title = numberInfo ? `${numberInfo.number}. ${numberInfo.cleanName}` : catalog.name;
+    
+    // Try to fetch actual content if this catalog has content and no sub-catalogs
+    if (this.qoderApiService && catalog.status === 'completed' && (!catalog.subCatalog || catalog.subCatalog.length === 0)) {
+      try {
+        // Use original document ID for API calls (extract from potentially encoded hierarchy path)
+        const originalId = this.getOriginalDocumentId(catalog.id);
+        const wikiDocument = await this.qoderApiService.getWikiContent(originalId);
+        let content = this.processMarkdownContent(wikiDocument.content, {
+          preserveHierarchy: true,
+          includeTableOfContents: false,
+          createIndexFile: false,
+          exportStructure: ExportStructureType.TREE
+        });
+        
+        // Add title if not present
+        if (!content.startsWith('#')) {
+          content = `# ${title}\n\n${content}`;
+        }
+        return content;
+      } catch (error) {
+        console.warn(`Failed to fetch content for ${catalog.name}:`, error);
+      }
+    }
+    
+    // Default README content with navigation
+    let content = `# ${title}\n\n`;
+    content += `This section contains documentation for ${catalog.name}.\n\n`;
+    
+    if (catalog.subCatalog && catalog.subCatalog.length > 0) {
+      content += `## Contents\n\n`;
+      catalog.subCatalog.forEach((subCatalog, index) => {
+        const subNumberInfo = numberInfo ? `${numberInfo.number}.${index + 1}` : '';
+        const subName = this.cleanDocumentName(subCatalog.name);
+        const linkName = subNumberInfo ? `${subNumberInfo}. ${subName}` : subName;
+        if (subCatalog.subCatalog && subCatalog.subCatalog.length > 0) {
+          content += `- [${linkName}](./${linkName}/README.md)\n`;
+        } else {
+          content += `- [${linkName}](./${linkName}.md)\n`;
+        }
+      });
+      content += '\n';
+    }
+    
+    content += `*Generated on ${new Date().toISOString()}*\n`;
+    return content;
+  }
+
+  /**
+   * Creates content for tree structure leaf documents, fetching from API if available
+   */
+  private async createContentTree(catalog: WikiCatalog, numberInfo?: { number: string, cleanName: string }): Promise<string> {
+    const title = numberInfo ? `${numberInfo.number}. ${numberInfo.cleanName}` : catalog.name;
+    
+    if (this.qoderApiService && catalog.status === 'completed') {
+      try {
+        // Use original document ID for API calls (extract from potentially encoded hierarchy path)
+        const originalId = this.getOriginalDocumentId(catalog.id);
+        const wikiDocument = await this.qoderApiService.getWikiContent(originalId);
+        let content = this.processMarkdownContent(wikiDocument.content, {
+          preserveHierarchy: true,
+          includeTableOfContents: false,
+          createIndexFile: false,
+          exportStructure: ExportStructureType.TREE
+        });
+        
+        // Add title if not present
+        if (!content.startsWith('#')) {
+          content = `# ${title}\n\n${content}`;
+        }
+        return content;
+      } catch (error) {
+        // Fall back to placeholder if API call fails
+        console.warn(`Failed to fetch content for ${catalog.name}:`, error);
+      }
+    }
+    
+    // Placeholder content as fallback
+    let content = `# ${title}\n\n`;
+    content += `**Document ID:** ${catalog.id}\n`;
+    content += `**Status:** ${catalog.status}\n\n`;
+    content += `This document was exported from Qoder wiki catalog.\n\n`;
+    content += `*Generated on ${new Date().toISOString()}*\n`;
+    return content;
+  }
+
   /**
  
   * Flattens catalog hierarchy to get all items with their relative paths.
@@ -676,6 +1100,86 @@ export class MarkdownExporter {
   }
 
   /**
+   * Generates a numbered filename for flat structure
+   * @param documentName - Original document name
+   * @param index - Document index (1-based)
+   * @param parentIndex - Parent document index for sub-documents
+   * @returns Numbered filename like "1. Introduction.md" or "2.1. Core Architecture.md"
+   */
+  private generateNumberedFilename(documentName: string, index: number, parentIndex?: number): string {
+    const cleanName = this.cleanDocumentName(documentName);
+    const number = parentIndex ? `${parentIndex}.${index}` : `${index}`;
+    return `${number}. ${cleanName}.md`;
+  }
+
+  /**
+   * Cleans document name for better readability
+   * @param name - Original document name
+   * @returns Cleaned name
+   */
+  private cleanDocumentName(name: string): string {
+    // Remove common prefixes and suffixes
+    let cleaned = name
+      .replace(/^(Document|Doc|File|Page)[\s\-_]*/i, '')
+      .replace(/[\s\-_]*(Document|Doc|File|Page)$/i, '')
+      .replace(/^[0-9]+[\.\-_\s]*/, '') // Remove existing numbers
+      .replace(/[_-]/g, ' ') // Replace underscores and hyphens with spaces
+      .trim();
+
+    // Capitalize first letter and each word
+    cleaned = cleaned
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+
+    return cleaned || 'Untitled';
+  }
+
+  /**
+   * Assigns hierarchical numbers to documents based on their catalog structure
+   * @param catalogs - Array of wiki catalogs
+   * @returns Map of document ID to numbering info
+   */
+  private assignDocumentNumbers(catalogs: WikiCatalog[]): Map<string, { number: string, cleanName: string }> {
+    const numberMap = new Map<string, { number: string, cleanName: string }>();
+    let currentIndex = 1;
+
+    const processLevel = (items: WikiCatalog[], parentNumber?: string) => {
+      let levelIndex = parentNumber ? 1 : currentIndex;
+
+      for (const catalog of items) {
+        const number = parentNumber ? `${parentNumber}.${levelIndex}` : `${levelIndex}`;
+        const cleanName = this.cleanDocumentName(catalog.name);
+        
+        numberMap.set(catalog.id, { number, cleanName });
+
+        if (catalog.subCatalog && catalog.subCatalog.length > 0) {
+          processLevel(catalog.subCatalog, number);
+        }
+
+        levelIndex++;
+      }
+
+      if (!parentNumber) {
+        currentIndex = levelIndex;
+      }
+    };
+
+    processLevel(catalogs);
+    return numberMap;
+  }
+
+  /**
+   * Extracts the original document ID from a potentially encoded hierarchy path.
+   * @param hierarchyId - The ID which might be encoded (e.g., "parent1_parent2_docId")
+   * @returns Original document ID (e.g., "docId")
+   */
+  private getOriginalDocumentId(hierarchyId: string): string {
+    const parts = hierarchyId.split('_');
+    return parts[parts.length - 1] || hierarchyId;
+  }
+
+  /**
    * Gets default export options merged with provided options.
    * @param options - Provided options (optional)
    * @returns Complete options object with defaults
@@ -685,6 +1189,7 @@ export class MarkdownExporter {
       preserveHierarchy: true,
       includeTableOfContents: false,
       createIndexFile: true,
+      exportStructure: ExportStructureType.FLAT,
       ...options
     };
   }

@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { WikiCatalog, DocumentStatus, DocumentSelector as IDocumentSelector } from '../../types/qoder';
+import { WikiCatalog, DocumentStatus, DocumentSelector as IDocumentSelector, ExportStructureType } from '../../types/qoder';
 
 interface DocumentQuickPickItem extends vscode.QuickPickItem {
   catalog: WikiCatalog;
@@ -116,24 +116,65 @@ export class DocumentSelector implements IDocumentSelector {
   }
 
   /**
+   * Shows a dialog to choose export structure (flat or tree)
+   * @returns Promise resolving to selected structure type
+   */
+  async showExportStructureDialog(): Promise<ExportStructureType | undefined> {
+    const items: vscode.QuickPickItem[] = [
+      {
+        label: '📄 Flat Structure',
+        description: 'All files in one folder with numbered names',
+        detail: 'Example: "1. Introduction.md", "2.1. Core Architecture.md"',
+      },
+      {
+        label: '📁 Tree Structure', 
+        description: 'Organized folders with README files',
+        detail: 'Example: "2. System Overview/" folder containing "README.md" and subfiles',
+      }
+    ];
+
+    const selection = await vscode.window.showQuickPick(items, {
+      title: 'Choose Export Structure',
+      placeHolder: 'Select how you want to organize the exported documents',
+      ignoreFocusOut: true
+    });
+
+    if (!selection) {
+      return undefined;
+    }
+
+    return selection.label.includes('Flat') ? ExportStructureType.FLAT : ExportStructureType.TREE;
+  }
+
+  /**
    * Creates hierarchical QuickPick items from wiki catalogs
    * @param catalogs Array of wiki catalogs
    * @param level Current nesting level for indentation
+   * @param parentPath Path of parent IDs for hierarchy encoding
    * @returns Array of QuickPickItem objects
    */
-  private createQuickPickItems(catalogs: WikiCatalog[], level: number = 0): DocumentQuickPickItem[] {
+  private createQuickPickItems(catalogs: WikiCatalog[], level: number = 0, parentPath: string = ''): DocumentQuickPickItem[] {
     const items: DocumentQuickPickItem[] = [];
 
     for (const catalog of catalogs) {
       const indent = '  '.repeat(level);
       const hasChildren = catalog.subCatalog && catalog.subCatalog.length > 0;
       
+      // Create hierarchy path by concatenating parent path with current ID
+      const hierarchyPath = parentPath ? `${parentPath}_${catalog.id}` : catalog.id;
+      
+      // Create modified catalog with hierarchy-encoded ID
+      const catalogWithHierarchy: WikiCatalog = {
+        ...catalog,
+        id: hierarchyPath // Encode hierarchy in the ID
+      };
+      
       // Create item for current catalog
       const item: DocumentQuickPickItem = {
         label: `${indent}${hasChildren ? '📁' : '📄'} ${catalog.name}`,
         description: this.getStatusDescription(catalog.status),
-        detail: hasChildren ? `Contains ${this.countDocuments(catalog)} documents` : catalog.id,
-        catalog: catalog,
+        detail: hasChildren ? `Contains ${this.countDocuments(catalog)} documents` : hierarchyPath,
+        catalog: catalogWithHierarchy,
         level: level,
         isParent: hasChildren ? !this.isLeafDocument(catalog) : false
       };
@@ -143,9 +184,9 @@ export class DocumentSelector implements IDocumentSelector {
       
       items.push(item);
 
-      // Recursively add sub-catalogs
+      // Recursively add sub-catalogs with current hierarchy path
       if (catalog.subCatalog && catalog.subCatalog.length > 0) {
-        const subItems = this.createQuickPickItems(catalog.subCatalog, level + 1);
+        const subItems = this.createQuickPickItems(catalog.subCatalog, level + 1, hierarchyPath);
         items.push(...subItems);
       }
     }

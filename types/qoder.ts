@@ -80,6 +80,12 @@ export interface MarkdownExportOptions {
   preserveHierarchy: boolean;
   includeTableOfContents: boolean;
   createIndexFile: boolean;
+  exportStructure: ExportStructureType;
+}
+
+export enum ExportStructureType {
+  FLAT = 'flat',
+  TREE = 'tree'
 }
 
 // Progress Callback Type
@@ -105,6 +111,7 @@ export interface ExportService {
   exportDocuments(
     documents: WikiCatalog[],
     destination: string,
+    exportStructure: ExportStructureType,
     progressCallback?: ProgressCallback,
     cancellationToken?: any // VSCode CancellationToken
   ): Promise<ExportResult>;
@@ -132,6 +139,7 @@ export interface MarkdownExporter {
 export interface DocumentSelector {
   showSelectionDialog(catalogs: WikiCatalog[]): Promise<WikiCatalog[]>;
   showDestinationPicker(): Promise<string>;
+  showExportStructureDialog(): Promise<ExportStructureType | undefined>;
 }
 
 export interface FileService {

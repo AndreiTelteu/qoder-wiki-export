@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { MarkdownExporter } from '../exporters/markdownExporter';
-import { WikiDocument, WikiCatalog, MarkdownExportOptions, FileService } from '../../types/qoder';
+import { WikiDocument, WikiCatalog, MarkdownExportOptions, FileService, ExportStructureType } from '../../types/qoder';
 
 /**
  * Mock FileService that doesn't depend on VSCode
@@ -140,7 +140,8 @@ async function runSimpleTest() {
     const options: MarkdownExportOptions = {
       preserveHierarchy: true,
       includeTableOfContents: false,
-      createIndexFile: true
+      createIndexFile: true,
+      exportStructure: ExportStructureType.FLAT
     };
 
     const result = await exporter.export(documents, tempDir, options);

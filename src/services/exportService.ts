@@ -8,6 +8,7 @@ import {
   ProgressCallback,
   ProgressInfo,
   MarkdownExportOptions,
+  ExportStructureType,
   ExportService as IExportService
 } from '../../types/qoder';
 import { QoderApiServiceImpl } from './qoderApiService';
@@ -42,7 +43,7 @@ export class ExportService implements IExportService {
     this.errorHandler = errorHandler || new ErrorHandler();
     this.qoderApiService = qoderApiService || new QoderApiServiceImpl(this.errorHandler);
     this.fileService = fileService || new FileService();
-    this.markdownExporter = markdownExporter || new MarkdownExporter(this.fileService);
+    this.markdownExporter = markdownExporter || new MarkdownExporter(this.fileService, this.qoderApiService);
     this.notificationService = notificationService || new NotificationService();
     this.gracefulDegradation = gracefulDegradation || new GracefulDegradation(this.errorHandler);
   }
@@ -52,6 +53,7 @@ export class ExportService implements IExportService {
    * Coordinates all export steps including API calls, document retrieval, and file writing.
    * @param documents - Array of WikiCatalog objects to export
    * @param destination - Destination directory path
+   * @param exportStructure - Export structure type (flat or tree)
    * @param progressCallback - Optional callback for progress updates
    * @param cancellationToken - Optional cancellation token for user cancellation
    * @returns Promise<ExportResult> - Result of the export operation
@@ -59,8 +61,10 @@ export class ExportService implements IExportService {
   async exportDocuments(
     documents: WikiCatalog[],
     destination: string,
+    exportStructure: ExportStructureType,
     progressCallback?: ProgressCallback,
-    cancellationToken?: vscode.CancellationToken
+    cancellationToken?: vscode.CancellationToken,
+    originalCatalogs?: WikiCatalog[]
   ): Promise<ExportResult> {
     this.cancellationToken = cancellationToken;
     this.isExporting = true;
@@ -101,14 +105,15 @@ export class ExportService implements IExportService {
       // Check if Qoder is available and user is authenticated
       await this.validateQoderAvailability();
 
-      // Filter documents to only include completed ones
-      const completedDocuments = this.filterCompletedDocuments(documents);
+      // Documents are already selected as completed from the UI, so no need to filter again
+      // But let's verify they have the completed status
+      const validDocuments = documents.filter(doc => doc.status === 'completed');
       
-      this.errorHandler.logInfo(`Filtered documents: ${completedDocuments.length} completed out of ${documents.length} total`);
+      this.errorHandler.logInfo(`Selected documents: ${validDocuments.length} out of ${documents.length} total`);
       
-      if (completedDocuments.length === 0) {
-        this.errorHandler.logWarning('No completed documents found for export');
-        this.notificationService.showQuickWarning('No completed documents found to export.');
+      if (validDocuments.length === 0) {
+        this.errorHandler.logWarning('No valid completed documents selected for export');
+        this.notificationService.showQuickWarning('No valid completed documents found to export.');
         
         return {
           success: true,
@@ -123,7 +128,7 @@ export class ExportService implements IExportService {
       this.updateProgress(progressCallback, {
         currentDocument: 'Preparing export...',
         completed: 0,
-        total: completedDocuments.length,
+        total: validDocuments.length,
         percentage: 0
       });
 
@@ -133,24 +138,22 @@ export class ExportService implements IExportService {
       // Ensure destination directory exists
       await this.fileService.createDirectory(destination);
 
-      // Retrieve document content for all documents
-      const documentsWithContent = await this.retrieveDocumentContent(
-        completedDocuments,
-        progressCallback
-      );
-
-      // Check for cancellation after content retrieval
-      this.checkCancellation();
-
-      // Export documents using MarkdownExporter
+      // Export documents using MarkdownExporter with original hierarchy
       const exportOptions: MarkdownExportOptions = {
         preserveHierarchy: true,
         includeTableOfContents: false,
-        createIndexFile: true
+        createIndexFile: true,
+        exportStructure: exportStructure
       };
 
-      const exportResult = await this.markdownExporter.export(
-        documentsWithContent.successful,
+      // Reconstruct hierarchy for selected documents
+      const hierarchicalDocuments = originalCatalogs ? 
+        this.reconstructHierarchy(originalCatalogs, validDocuments) :
+        validDocuments; // Fallback to flat structure if no original catalogs provided
+      
+      // Use exportCatalogs with reconstructed hierarchy
+      const exportResult = await this.markdownExporter.exportCatalogs(
+        hierarchicalDocuments,
         destination,
         exportOptions,
         progressCallback
@@ -158,14 +161,14 @@ export class ExportService implements IExportService {
 
       // Aggregate results
       exportedCount = exportResult.exportedCount;
-      failedCount = exportResult.failedCount + documentsWithContent.failed.length;
-      errors.push(...exportResult.errors, ...documentsWithContent.errors);
+      failedCount = exportResult.failedCount;
+      errors.push(...exportResult.errors);
 
       // Final progress update
       this.updateProgress(progressCallback, {
         currentDocument: 'Export complete',
-        completed: completedDocuments.length,
-        total: completedDocuments.length,
+        completed: validDocuments.length,
+        total: validDocuments.length,
         percentage: 100
       });
 
@@ -175,7 +178,7 @@ export class ExportService implements IExportService {
         exportedCount,
         failedCount,
         errorCount: errors.length,
-        documentsProcessed: completedDocuments.length
+        documentsProcessed: validDocuments.length
       });
       
       this.errorHandler.logInfo('Export operation completed', {
@@ -277,6 +280,91 @@ export class ExportService implements IExportService {
         'User is not logged in to Qoder. Please log in to access wiki content.'
       );
     }
+  }
+
+  /**
+   * Reconstructs hierarchical structure from selected documents with encoded hierarchy paths.
+   * Decodes hierarchy paths (like "parent1_parent2_documentId") to rebuild the proper structure.
+   * @param originalDocuments - Original hierarchical documents from API
+   * @param selectedDocuments - Flat array of selected completed documents with encoded hierarchy paths
+   * @returns Hierarchical structure containing only selected documents with preserved hierarchy
+   */
+  private reconstructHierarchy(
+    originalDocuments: WikiCatalog[],
+    selectedDocuments: WikiCatalog[]
+  ): WikiCatalog[] {
+    // Create a map to build the hierarchy structure
+    const hierarchyMap = new Map<string, WikiCatalog>();
+    const rootDocuments: WikiCatalog[] = [];
+    
+    // First, decode all selected documents and create original ID mapping
+    const originalIdMap = new Map<string, WikiCatalog>();
+    const createOriginalIdMap = (catalogs: WikiCatalog[]) => {
+      for (const catalog of catalogs) {
+        originalIdMap.set(catalog.id, catalog);
+        if (catalog.subCatalog) {
+          createOriginalIdMap(catalog.subCatalog);
+        }
+      }
+    };
+    createOriginalIdMap(originalDocuments);
+    
+    // Process each selected document
+    for (const selectedDoc of selectedDocuments) {
+      const hierarchyPath = selectedDoc.id; // This contains the encoded path like "parent1_parent2_docId"
+      const pathParts = hierarchyPath.split('_');
+      
+      // Build the hierarchy from root to leaf
+      let currentParent: WikiCatalog[] = rootDocuments;
+      let currentPath = '';
+      
+      for (let i = 0; i < pathParts.length; i++) {
+        const currentId = pathParts[i];
+        if (!currentId) continue; // Skip empty parts
+        
+        currentPath = currentPath ? `${currentPath}_${currentId}` : currentId;
+        
+        // Check if we already have this node in our hierarchy
+        let existingNode = currentParent.find(doc => this.getOriginalId(doc.id) === currentId);
+        
+        if (!existingNode) {
+          // Create new node using original document data
+          const originalDoc = originalIdMap.get(currentId);
+          if (originalDoc) {
+            const newNode: WikiCatalog = {
+              id: currentId, // Use original ID, not encoded path
+              name: originalDoc.name,
+              status: originalDoc.status
+            };
+            
+            // Add subCatalog array if this is not a leaf node
+            if (i < pathParts.length - 1) {
+              newNode.subCatalog = [];
+            }
+            
+            currentParent.push(newNode);
+            existingNode = newNode;
+          }
+        }
+        
+        // Move to the next level if this is not the last part
+        if (i < pathParts.length - 1 && existingNode?.subCatalog) {
+          currentParent = existingNode.subCatalog;
+        }
+      }
+    }
+    
+    return rootDocuments;
+  }
+
+  /**
+   * Extracts the original document ID from a potentially encoded hierarchy path
+   * @param hierarchyId - The ID which might be encoded (e.g., "parent1_parent2_docId")
+   * @returns Original document ID (e.g., "docId")
+   */
+  private getOriginalId(hierarchyId: string): string {
+    const parts = hierarchyId.split('_');
+    return parts[parts.length - 1] || hierarchyId;
   }
 
   /**
@@ -389,7 +477,15 @@ export class ExportService implements IExportService {
       async () => {
         // Check for cancellation before each attempt
         this.checkCancellation();
-        return await this.qoderApiService.getWikiContent(document.id);
+        const wikiDocument = await this.qoderApiService.getWikiContent(document.id);
+        
+        // Preserve the human-readable name from the catalog
+        return {
+          id: wikiDocument.id,
+          name: document.name, // Use catalog name instead of API name
+          content: wikiDocument.content,
+          status: wikiDocument.status || 'completed'
+        };
       },
       maxRetries,
       1000

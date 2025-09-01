@@ -9,7 +9,9 @@ import {
   ExportResult, 
   ExportError, 
   ExportErrorType,
-  ProgressInfo
+  ProgressInfo,
+  ExportStructureType,
+  MarkdownExportOptions
 } from '../../types/qoder';
 import { ExportService } from '../services/exportService';
 import { QoderApiServiceImpl } from '../services/qoderApiService';
@@ -76,15 +78,22 @@ export class ExportCommand {
         return;
       }
 
-      // Step 4: Let user choose export destination
+      // Step 4: Let user choose export structure 
+      const exportStructure = await this.selectExportStructure();
+      if (!exportStructure) {
+        this.errorHandler.logInfo('User cancelled structure selection');
+        return;
+      }
+
+      // Step 5: Let user choose export destination
       const destination = await this.selectExportDestination();
       if (!destination) {
         this.errorHandler.logInfo('User cancelled destination selection');
         return;
       }
 
-      // Step 5: Execute export with progress reporting
-      await this.executeExportWithProgress(selectedDocuments, destination);
+      // Step 6: Execute export with progress reporting
+      await this.executeExportWithProgress(selectedDocuments, destination, exportStructure, catalogs);
 
     } catch (error) {
       this.errorHandler.handleError(
@@ -188,6 +197,20 @@ export class ExportCommand {
   }
 
   /**
+   * Shows export structure selection dialog
+   */
+  private async selectExportStructure(): Promise<ExportStructureType | undefined> {
+    try {
+      return await this.documentSelector.showExportStructureDialog();
+    } catch (error) {
+      throw new ExportError(
+        ExportErrorType.API_ERROR,
+        `Failed to show export structure selection: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
    * Shows destination folder picker and returns selected path
    */
   private async selectExportDestination(): Promise<string> {
@@ -218,7 +241,9 @@ export class ExportCommand {
    */
   private async executeExportWithProgress(
     documents: WikiCatalog[],
-    destination: string
+    destination: string,
+    exportStructure: ExportStructureType,
+    originalCatalogs: WikiCatalog[]
   ): Promise<void> {
     const result = await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
@@ -243,8 +268,10 @@ export class ExportCommand {
         return await this.exportService.exportDocuments(
           documents,
           destination,
+          exportStructure,
           progressCallback,
-          token
+          token,
+          originalCatalogs
         );
       } catch (error) {
         // Handle cancellation
