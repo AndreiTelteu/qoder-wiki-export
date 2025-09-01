@@ -16,16 +16,22 @@ A VSCode extension that provides export functionality for documentation generate
 - Qoder extension (`aicoding.aicoding-agent`) must be installed and active
 - User must be logged in to Qoder
 
+## Installation
+
+1. Clone this repository
+2. Install the official [VSCode packing tool](https://code.visualstudio.com/api/working-with-extensions/publishing-extension): `npm install -g @vscode/vsce`
+3. Run `npm install` and then `npm run package`
+4. In Qoder `Ctrl+Shift+P` or `Cmd+Shift+P` and run `Extensions: Install from VSIX` to install the extension. Choose the .vsix file generated in this repo folder.
+
 ## Usage
 
 1. Ensure you have the Qoder extension installed and are logged in
 2. Generate wiki documentation using Qoder
 3. Open the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
-4. Run one of the following commands:
-   - `Qoder Wiki Export: Export Qoder Wiki Documentation` - Export all available documentation
-   - `Qoder Wiki Export: Export Selected Wiki Documents` - Choose specific documents to export
-   - `Qoder Wiki Export: Check Qoder Status` - Verify Qoder extension status
-   - `Qoder Wiki Export: Show Extension Info` - Display extension information
+4. Run the following command:  `Qoder Wiki Export: Export Qoder Wiki Documentation`
+5. Select the documents you want to export
+6. Choose the way you want the hierarchy of the documents to be represented: Flat Structure or Tree Structure
+7. Choose a destination folder for the exported files
 
 ## Export Process
 
